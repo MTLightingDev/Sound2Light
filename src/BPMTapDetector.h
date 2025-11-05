@@ -35,21 +35,14 @@
  * @brief The BpmConstants namespace contains all constants used in BpmTapDetection
  */
 namespace BpmConstants {
-	/**
-	 * @brief HISTORY_LENGTH is the length of the beat duration history to evaluate
-	 */
-    static const int HISTORY_LENGTH = 3;
-
-    static const int MIN_BPM = 30; // for deciding when a beat is too old
-
-    static const int GLOBAL_MIN_BPM = 50;
+    static const int HISTORY_LENGTH = 3; //length of the beat duration history to evaluate
+	static const int MIN_BPM = 30; // for deciding when a beat is too old
+	static const int GLOBAL_MIN_BPM = 50;
     static const int GLOBAL_MAX_BPM = 300;
 }
 
-
 class BPMTapDetector
 {
-
 public:
 
     explicit BPMTapDetector(BPMOscControler* osc);
@@ -58,34 +51,37 @@ public:
 
     void reset(); // Reset all information
 
-    bool hasBpm() { return m_bpm != 0; } // Wether there is a value
+	bool hasBpm() const { return m_bpm != 0; }
 
-    float getBpm() const { return m_bpm; } // Get the current bpm
-    void setBpm(float value) { m_bpm = value; m_oscController->transmitBPM(m_bpm);} // Set the bpm (if a user enters a value by keypad)
+    float getBpm() const { return m_bpm; }
 
-    void setMinBPM(int value); // Sets the minimum bpm of the range
+    void setBpm(float value) { m_bpm = value; m_oscController->transmitBPM(m_bpm);}
 
-    int getMinBPM() { return m_minBPM; } // Returns the minium bpm of the range
+    void setMinBPM(int value);
+
+    int getMinBPM() const { return m_minBPM; }
 
 protected:
 	/**
 	 * @brief m_bpm current detected BPM value
 	 */
     float               m_bpm;
-    /**
+
+	/**
      * @brief m_startTime stores the time when this object was created or rest
      */
     HighResTime::time_point_t   m_startTime;
+
 	/**
 	 * @brief m_lastBeats stores the times of the last beats in seconds since start
 	 */
     Qt3DCore::QCircularBuffer<double> m_lastBeats;
+
 	/**
 	 * @brief m_lastValue stores the last input value
 	 */
     double              m_lastValue;
-
-    int                 m_minBPM;
+	int                 m_minBPM;
     BPMOscControler*    m_oscController; // the object responsible for handling osc output
 };
 
