@@ -21,7 +21,7 @@
 #ifndef MONOAUDIOBUFFER_H
 #define MONOAUDIOBUFFER_H
 
-#include "QCircularBuffer.h"
+#include "CircularBuffer.h"
 
 #include <QVector>
 

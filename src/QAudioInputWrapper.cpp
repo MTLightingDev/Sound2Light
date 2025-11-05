@@ -26,22 +26,24 @@
 #include <QVector>
 #include <QByteArray>
 #include <QDebug>
+#include <QtMultimedia/QAudioFormat>
+#include <QtMultimedia/QAudioInput>
+#include <QtMultimedia/QAudioDeviceInfo>
 
-#include <iostream>
+#include <QtEndian>
+#include <cstring>
 
 QAudioInputWrapper::QAudioInputWrapper(MonoAudioBuffer *buffer)
     : AudioInputInterface(buffer)
-    , m_audioInput(0)
-	, m_audioIODevice(0)
+    , m_audioInput(nullptr)
+    , m_audioIODevice(nullptr)
 {
-    // Set up the desired format:
-    // If the input device doesn't support this the nearest format will be used.
+    // Set up the desired format for mono audio input (Qt5 API)
     m_desiredAudioFormat.setSampleRate(44100);
-    m_desiredAudioFormat.setChannelCount(2);
+    m_desiredAudioFormat.setChannelCount(1);  // mono
     m_desiredAudioFormat.setSampleSize(16);
-    m_desiredAudioFormat.setCodec("audio/pcm");
-    m_desiredAudioFormat.setByteOrder(QAudioFormat::LittleEndian);
     m_desiredAudioFormat.setSampleType(QAudioFormat::SignedInt);
+    m_desiredAudioFormat.setByteOrder(QAudioFormat::LittleEndian);
 }
 
 QAudioInputWrapper::~QAudioInputWrapper()
@@ -54,26 +56,25 @@ QAudioInputWrapper::~QAudioInputWrapper()
 		m_audioIODevice->close();
 	}
 	delete m_audioInput;
+	m_audioInput = nullptr;
+	m_audioIODevice = nullptr;
 }
 
 QStringList QAudioInputWrapper::getAvailableInputs() const
 {
-    // get List of input device names from QList<QAudioDeviceInfo>:
+    // get List of input device names from Qt5 API (QAudioDeviceInfo)
     QStringList deviceList;
-    QList<QAudioDeviceInfo> devices = QAudioDeviceInfo::availableDevices(QAudio::AudioInput);
-    foreach(QAudioDeviceInfo device, devices) {
+    const QList<QAudioDeviceInfo> devices = QAudioDeviceInfo::availableDevices(QAudio::AudioInput);
+    for (const QAudioDeviceInfo &device : devices) {
         deviceList.append(device.deviceName());
     }
-	return deviceList;
+    return deviceList;
 }
 
 QString QAudioInputWrapper::getDefaultInputName() const
 {
-	QStringList devices = getAvailableInputs();
-	// if there are no devices, return empty string:
-	if (devices.size() <= 0) return "";
-	QString defaultInputName = QAudioDeviceInfo::defaultInputDevice().deviceName();
-	return defaultInputName;
+    const QAudioDeviceInfo defaultDevice = QAudioDeviceInfo::defaultInputDevice();
+    return defaultDevice.isNull() ? QString("") : defaultDevice.deviceName();
 }
 
 void QAudioInputWrapper::setInputByName(const QString &inputName)
@@ -83,35 +84,37 @@ void QAudioInputWrapper::setInputByName(const QString &inputName)
         m_audioInput->stop();
     }
     if (m_audioIODevice && m_audioIODevice->isOpen()) {
-        disconnect(m_audioIODevice, SIGNAL(readyRead()), this, SLOT(audioDataReady()));
+        disconnect(m_audioIODevice, &QIODevice::readyRead, this, &QAudioInputWrapper::audioDataReady);
         m_audioIODevice->close();
     }
     delete m_audioInput;
     m_audioInput = 0;
 
-    // Get device info of new input:
-    QList<QAudioDeviceInfo> devices = QAudioDeviceInfo::availableDevices(QAudio::AudioInput);
-    QAudioDeviceInfo info = *devices.begin();
-    foreach(QAudioDeviceInfo device, devices) {
+    // Get device info of new input (Qt5 API):
+    const QList<QAudioDeviceInfo> devices = QAudioDeviceInfo::availableDevices(QAudio::AudioInput);
+    QAudioDeviceInfo selectedDevice = QAudioDeviceInfo::defaultInputDevice();
+    for (const QAudioDeviceInfo &device : devices) {
         if (device.deviceName() == inputName) {
-            info = device;
+            selectedDevice = device;
+            break;
         }
     }
 
     // check if desired format is supported:
-    if (!info.isFormatSupported(m_desiredAudioFormat)) {
-        qWarning() << "Default audio format not supported, trying to use the nearest.";
-        m_actualAudioFormat = info.nearestFormat(m_desiredAudioFormat);
+    if (!selectedDevice.isFormatSupported(m_desiredAudioFormat)) {
+        qWarning() << "Desired audio format not supported, using preferred format.";
+        qWarning() << "Current device:" << selectedDevice.preferredFormat();
+        m_actualAudioFormat = selectedDevice.preferredFormat();
     } else {
         m_actualAudioFormat = m_desiredAudioFormat;
     }
 
     // create new input:
-    m_activeInputName = inputName;
-    m_audioInput = new QAudioInput(info, m_actualAudioFormat, this);
-	m_audioInput->setVolume(1.0);
+    m_activeInputName = selectedDevice.deviceName();
+    m_audioInput = new QAudioInput(selectedDevice, m_actualAudioFormat, this);
+    m_audioInput->setVolume(1.0);
     m_audioIODevice = m_audioInput->start();
-    connect(m_audioIODevice, SIGNAL(readyRead()), this, SLOT(audioDataReady()));
+    connect(m_audioIODevice, &QIODevice::readyRead, this, &QAudioInputWrapper::audioDataReady);
 }
 
 qreal QAudioInputWrapper::getVolume() const
@@ -129,21 +132,72 @@ void QAudioInputWrapper::setVolume(const qreal &value)
 void QAudioInputWrapper::audioDataReady()
 {
 	// read data from input as QByteArray:
-	QByteArray data = m_audioIODevice->readAll();
-    const int bytesPerSample = m_actualAudioFormat.sampleSize() / 8;
-    const std::size_t numSamples = data.size() / bytesPerSample;
-    QVector<qreal> realData(numSamples);
-    const char *ptr = data.constData();
+    QByteArray data = m_audioIODevice->readAll();
 
-    for (std::size_t i=0; i<numSamples; ++i) {
-        // interpret byte in QByteArray as int16 (because 16bit is desired sample format):
-        const qint16 pcmSample = *reinterpret_cast<const qint16*>(ptr);
-        // convert to real and scale down to range [-1.0, 1.0]:
-        const qreal scaled = qreal(pcmSample) / 32768;
+    const int bytesPerSample = m_actualAudioFormat.sampleSize() / 8; // Qt5 API
+    if (bytesPerSample <= 0) return;
+
+    const std::size_t numSamples = std::size_t(data.size()) / std::size_t(bytesPerSample);
+    QVector<qreal> realData(numSamples);
+
+    const char *ptr = data.constData();
+    const bool isLittleEndian = (m_actualAudioFormat.byteOrder() == QAudioFormat::LittleEndian);
+
+    for (std::size_t i = 0; i < numSamples; ++i) {
+        qreal scaled = 0.0;
+        switch (m_actualAudioFormat.sampleType()) {
+        case QAudioFormat::SignedInt:
+            if (bytesPerSample == 2) {
+                qint16 pcm = isLittleEndian
+                    ? qFromLittleEndian<qint16>(reinterpret_cast<const uchar*>(ptr))
+                    : qFromBigEndian<qint16>(reinterpret_cast<const uchar*>(ptr));
+                scaled = qreal(pcm) / 32768.0;
+            } else if (bytesPerSample == 4) {
+                qint32 pcm = isLittleEndian
+                    ? qFromLittleEndian<qint32>(reinterpret_cast<const uchar*>(ptr))
+                    : qFromBigEndian<qint32>(reinterpret_cast<const uchar*>(ptr));
+                scaled = qreal(pcm) / 2147483648.0; // 2^31
+            } else if (bytesPerSample == 1) {
+                // 8-bit signed PCM (rare)
+                const qint8 pcm = *reinterpret_cast<const qint8*>(ptr);
+                scaled = qreal(pcm) / 128.0;
+            }
+            break;
+        case QAudioFormat::UnSignedInt:
+            if (bytesPerSample == 1) {
+                const quint8 pcm = *reinterpret_cast<const quint8*>(ptr);
+                scaled = (qreal(int(pcm) - 128) / 128.0);
+            } else if (bytesPerSample == 2) {
+                quint16 pcm = isLittleEndian
+                    ? qFromLittleEndian<quint16>(reinterpret_cast<const uchar*>(ptr))
+                    : qFromBigEndian<quint16>(reinterpret_cast<const uchar*>(ptr));
+                // center at 0 and scale
+                scaled = (qreal(int(pcm) - 32768) / 32768.0);
+            } else if (bytesPerSample == 4) {
+                quint32 pcm = isLittleEndian
+                    ? qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(ptr))
+                    : qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(ptr));
+                scaled = (qreal(qint64(pcm) - 2147483648LL) / 2147483648.0);
+            }
+            break;
+        case QAudioFormat::Float:
+            if (bytesPerSample == 4) {
+                quint32 raw = isLittleEndian
+                    ? qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(ptr))
+                    : qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(ptr));
+                float f;
+                std::memcpy(&f, &raw, sizeof(float));
+                scaled = qreal(f);
+            }
+            break;
+        default:
+            scaled = 0.0;
+            break;
+        }
         realData[i] = scaled;
         ptr += bytesPerSample;
     }
 
-    // Call MonoAudioBuffer as next element in processing chain:
+    // Call MonoAudioBuffer as next element in the processing chain:
 	m_buffer->putSamples(realData, m_actualAudioFormat.channelCount());
 }

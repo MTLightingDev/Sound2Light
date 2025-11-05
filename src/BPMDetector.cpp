@@ -18,15 +18,19 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#ifndef BPM_DETECTOR_H
+#define BPM_DETECTOR_H
+#endif
+
 #include "BPMDetector.h"
 
 #include "FFTRealWrapper.h"
-#include "QCircularBuffer.h"
+#include "CircularBuffer.h"
 
-#include <QTime>
+#include <QElapsedTimer>
 #include <QColor>
 
-/* The BPM Detector is responsible for detecting the musical tempo of the input Signal 
+/* The BPM Detector is responsible for detecting the musical tempo of the input Signal
  * in Beats Per Minute. This inforamtion is then sent via osc to set Tempo of an effect
  * or BeatBoss (on cobalt).
  *
@@ -34,16 +38,14 @@
  * Interfacing
  * ===========
  *
- * A BPM Detector is initialized with a MonoAudioBuffer and a BPMOscController. The 
- * MonoAudioBuffer will be polled for new samples of audio data, and the 
+ * A BPM Detector is initialized with a MonoAudioBuffer and a BPMOscController. The
+ * MonoAudioBuffer will be polled for new samples of audio data, and the
  * BPMOscController will be provided with every newly detected tempo.
  *
  * It is the owners responsiblility to regularly call the detectBPM() function, which
- * will trigger the detection process from polling new data to pushing new value out to 
- * the BPMOscController. The owner should also call resetCache() before calling 
- * detectBPM() again after any break longer than the AudioBuffer.He can then get the 
- * bpm value and a boolean value indicating if the value is older than five seconds, 
- * which indicates that the signal did not contain sufficient rhythmic information in 
+ * will trigger the detection process from polling new data to pushing new value out to
+ * the BPMOscController. The owner should also call resetCache() before calling
+ * detectBPM() again after any break longer than the AudioBuffer"
  * the last seconds.
  *
  * The owner can also set a range in which the detecteed bpm shall reside. Any
@@ -91,7 +93,7 @@
  *
  * 2. Onset Detection `updateOnsets()`
  * -----------------------------------
- * Onset detection is performed every time new samples come in, because the peak 
+ * Onset detection is performed every time new samples come in, because the peak
  * detection algorithm takes an input of values normalized to an average of 0 and
  * a standard deviation of 1. This ensures that the volume of the signal has no
  * effect on the detection, but requires repeating the whole peak detection to ensure
@@ -104,7 +106,7 @@
  * 3. Beat Strings `updateStrings()`
  * ---------------------------------
  * To determine the beat of a song, simple approchaes like evaluating all distances
- * between two onsets have prooven inefficient, as they have too often caught onto 
+ * between two onsets have prooven inefficient, as they have too often caught onto
  * triplets, syncopes and other rhythmic phenomena in most types of music more complex
  * than a metronome. Therefore, the algorithm tries to identify what I like to call
  * "BeatStrings". A Beat String is a subset of the detected onsets that are evenly
@@ -116,18 +118,18 @@
  *
  * 4. Evaluation and Smoothing `evaluateStrings()`
  * -----------------------------------------------
- * As a first step, the string that has the highest score (sum of the collected 
+ * As a first step, the string that has the highest score (sum of the collected
  * amplitudes) is identified, and its average interval extracted. This could allready
  * be interpreted as the distance between two beats, converted to BPM and outputed
  * as the BPM. This has a very inconsistent output however, with sudden jumps to a
- * a factor of the tempo or a wrong value, only showing the right tempo most of the 
+ * a factor of the tempo or a wrong value, only showing the right tempo most of the
  * time. Smoothing by mere averaging would obviously not solve these problems either.
  * This is why there are multiple smoothing stages:
  *
  * - Compare the highest scoring interval to the last interval output by the whole
- *   process (not only this stage). If it deviates by one of a few selected factors or 
- *   fractions, and there is another string with a sufficiently high score that has 
- *   approximately the same interval, replace the highest scoring interval with its 
+ *   process (not only this stage). If it deviates by one of a few selected factors or
+ *   fractions, and there is another string with a sufficiently high score that has
+ *   approximately the same interval, replace the highest scoring interval with its
  *   interval
  * - Put the new value into a buffer that stores the last 16 Values. Perform clustering
  *   to group similar intervals, and only output a value if one of the clusters
@@ -137,8 +139,6 @@
  * the comparison by factors. It is then converted to a BPM, adapted to the range set
  * by the user and then set as m_bpm, from where it can be retrieved by calling
  * getBPM(). The OscController is also notified.
- * If no interval could be identified, a counter is increased to eventually return
- * true from bpmIsOld()
  */
 
 // --------------------------------------- Constants for BPM Detection ------------------------------
@@ -529,7 +529,7 @@ public:
         ++m_size;
     }
 
-    bool operator==(const BeatString& other) {
+    bool operator==(const BeatString& other) const {
         return m_averageInterval == other.m_averageInterval
                 && m_size == other.m_size
                 && m_nativeScore == other.m_nativeScore;
@@ -743,7 +743,7 @@ void BPMDetector::evaluateStrings()
                 {
                     // Check if there is another string that suggest strong enough evidence that the multiplied tempo could be the actual tempo
                     BeatString* plausibleString = plausibleStringForInterval(m_lastWinningInterval, maxString->getScore() / fraction);
-                    if (plausibleString) {
+                    if (plausibleString){
                         newInterval = plausibleString->getAverageInterval();
                         break;
                     }
@@ -753,8 +753,9 @@ void BPMDetector::evaluateStrings()
         m_lastIntervals.append(newInterval);
 
         // Perform clustering on the last bpms to smooth out any spikes
-        QLinkedList<IntervalCluster> finalIntervalClusters;
-        for (float& interval : m_lastIntervals) {
+        QList<IntervalCluster> finalIntervalClusters;
+        for (int i = 0; i < m_lastIntervals.size(); ++i) {
+            const float interval = m_lastIntervals[i];
             // Identify the cluster that most closely matches the interval (up to CLUSTER_WIDTH deviation is allowd)
             IntervalCluster* closestCluster = nullptr;
             int closestDistance = INT_MAX;
@@ -794,4 +795,3 @@ void BPMDetector::evaluateStrings()
     }
     m_framesSinceLastBPMDetection += CALLS_TO_WAIT;
 }
-

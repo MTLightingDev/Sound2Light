@@ -19,28 +19,7 @@
 // THE SOFTWARE.
 
 import QtQuick 2.5
-import QtQuick.Controls 1.4
 
-// ------------- Dark styled SplitView -----------------
-SplitView {
-	handleDelegate: Rectangle {
-		color: "#444"
-		height: 20
-		Item {
-			height: 5
-			width: 60
-			anchors.centerIn: parent
-			Rectangle {
-				height: 1
-				width: parent.width
-				color: "black"
-			}
-			Rectangle {
-				height: 1
-				width: parent.width
-				y: parent.height - 1
-				color: "black"
-			}
-		}
-	}
-}
+// Qt5-compatible stub for legacy UI. The current UI does not use this component.
+// If needed later, migrate to QtQuick.Controls 1.x SplitView or re-implement with Controls 2 during a Qt6 upgrade.
+Item { }

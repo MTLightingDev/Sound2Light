@@ -20,65 +20,59 @@
 
 import QtQuick 2.5
 import QtQuick.Controls 1.4
-import QtQuick.Layouts 1.2
 
 import "style"  // import all files in style dir
 
 // -------------------- This is the main application window. ----------------
 ApplicationWindow {
-	id: window
-	visible: true
-    width: minimalMode ? 160 : 1200
-    height: minimalMode ? 200 : 800
+    id: window
+    visible: true
+    width: 1200
+    height: 800
     minimumWidth:  160
     minimumHeight: 200
 
-	title: qsTr("ETC - Sound2Light")
-
-    // the minimal mode property, as an alias from the bpm settings where it is manipulated
-    property alias minimalMode: spectrumWithControls.minimalMode
+    title: qsTr("ETC - Sound2Light")
 
     Action {
         id: tapAction
         text: "Tap Tempo"
         shortcut: "Return"
-        onTriggered: {
-            controller.triggerBeat()
-        }
+        onTriggered: controller.triggerBeat()
     }
 
     Action {
         id: bpmToggleAction
-        text: "Enable BPM Detection"
+        text: controller.getBPMActive() ? "Disable BPM" : "Enable BPM"
         shortcut: "Escape"
-        onTriggered: {
-            controller.setBPMActive(!controller.getBPMActive())
-        }
+        onTriggered: controller.setBPMActive(!controller.getBPMActive())
     }
 
-	DarkBlueStripedBackground {}
+    DarkBlueStripedBackground {}
 
-	// -------------------------- SplitView ---------------------------
-	DarkSplitView {
-		id: splitView
-		anchors.fill: parent
-		orientation: Qt.Vertical
+    // Legacy UI composition using Controls 1.x components
+    Column {
+        anchors.fill: parent
+        spacing: 0
 
-		// -------------------------- Top Area with Spectrum ---------------------------
-		SpectrumWithControls {
-            id: spectrumWithControls
-			Layout.fillHeight: true
-            Layout.minimumHeight: minimalMode ? 200 : 300
-		}
+        // Top area: Spectrum and controls
+        Item {
+            id: topArea
+            width: parent.width
+            height: parent.height * 0.68
+            SpectrumWithControls {
+                anchors.fill: parent
+            }
+        }
 
-		// -------------------------- Bottom Area with Trigger Settings ---------------------------
-		TriggerSettingsArea {
-			id: triggerSettingsArea
-            visible: minimalMode ? false : true
-            Layout.minimumHeight: minimalMode ? 0 : detailsVisible ? 390 : 280
-            height: minimalMode ? 0 : 400
-		}
-
-	}
-
+        // Bottom area: Trigger settings
+        Item {
+            id: bottomArea
+            width: parent.width
+            height: parent.height - topArea.height
+            TriggerSettingsArea {
+                anchors.fill: parent
+            }
+        }
+    }
 }
