@@ -102,7 +102,7 @@ Dialog {
 
 						Connections {
 							target: controller
-							onOscLogChanged: {
+							function onOscLogChanged() {
 								logList.model = controller.getOscLog()
 							}
 						}

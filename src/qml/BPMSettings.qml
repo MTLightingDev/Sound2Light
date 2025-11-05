@@ -119,7 +119,7 @@ Item {
 
                 Connections {
                     target: controller
-                    onAutoBpmChanged: bpmActiveCheckbox.checked = controller.autoBpm
+                    function onAutoBpmChanged() { bpmActiveCheckbox.checked = controller.autoBpm }
                 }
             }
 
@@ -210,7 +210,7 @@ Item {
 
                 Connections {
                     target: controller
-                    onBpmRangeChanged: rangeComboBox.updateFromController()
+                    function onBpmRangeChanged() { rangeComboBox.updateFromController() }
                 }
 
                 function updateFromController() {
@@ -287,7 +287,7 @@ Item {
             }
             Connections {
                 target: controller
-                onBpmMuteChanged: {
+                function onBpmMuteChanged() {
                     muteButton.highlightColor = controller.getBPMMute() ? "#FF6633" : "lightgreen"
                     playimage.visible = controller.getBPMMute()
                     pauseimage.visible = !controller.getBPMMute()

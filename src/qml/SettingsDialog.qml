@@ -116,7 +116,7 @@ Dialog {
 			// ----------------------- OSC Ports ----------------------
 			Connections {
 				target: controller
-				onUseTcpChanged: {
+				function onUseTcpChanged() {
 					udpTxPort.visible = !controller.getUseTcp()
 					udpRxPort.visible = !controller.getUseTcp()
 					tcpPort.visible = controller.getUseTcp()

@@ -98,8 +98,8 @@ Dialog {
 								}
 								Connections {
 									target: controller
-									onPresetChanged: button.updateHighlighted()
-									onPresetChangedButNotSavedChanged: button.updateHighlighted()
+									function onPresetChanged() { button.updateHighlighted() }
+									function onPresetChangedButNotSavedChanged() { button.updateHighlighted() }
 								}
 							}
 

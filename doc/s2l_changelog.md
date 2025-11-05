@@ -1,7 +1,7 @@
 
 # Sound2Light Change Log
 
-### Version 0.0.3.4.0.0.0 - 4 November 2025
+### Version 0.0.4.0.0.0 - 4 November 2025
 
 - Upgraded to Qt 5 & C++ 17
 

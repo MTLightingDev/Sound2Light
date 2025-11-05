@@ -100,12 +100,12 @@ Row {
                     }
                     Connections {
                         target: controller
-                        onInputChanged: statusText.updateText()
-                        onSettingsChanged: statusText.updateText()
-                        onPresetNameChanged: statusText.updateText()
-                        onPresetChangedButNotSavedChanged: statusText.updateText()
-                        onIsConnectedChanged: statusText.updateText()
-                        onAddressChanged: statusText.updateText()
+                        function onInputChanged() { statusText.updateText() }
+                        function onSettingsChanged() { statusText.updateText() }
+                        function onPresetNameChanged() { statusText.updateText() }
+                        function onPresetChangedButNotSavedChanged() { statusText.updateText() }
+                        function onIsConnectedChanged() { statusText.updateText() }
+                        function onAddressChanged() { statusText.updateText() }
                     }
                 }
 
@@ -142,9 +142,9 @@ Row {
                     Connections {
                         target: controller
                         // update the LED when the connection state changed:
-                        onIsConnectedChanged: connectionLED.updateColor()
+                        function onIsConnectedChanged() { connectionLED.updateColor() }
                         // trigger the timer when a packet has been sent:
-                        onPacketSent: packetSentTimer.restart()
+                        function onPacketSent() { packetSentTimer.restart() }
                     }
                 }
 
@@ -162,8 +162,8 @@ Row {
                     }
                     Connections {
                         target: controller
-                        onIsConnectedChanged: rxPortText.updateText()
-                        onAddressChanged: rxPortText.updateText()
+                        function onIsConnectedChanged() { rxPortText.updateText() }
+                        function onAddressChanged() { rxPortText.updateText() }
                     }
                 }
 
@@ -189,7 +189,7 @@ Row {
                     Connections {
                         target: controller
                         // trigger the timer when a packet has been received:
-                        onMessageReceived: messageReceivedTimer.restart()
+                        function onMessageReceived() { messageReceivedTimer.restart() }
                     }
                 }
             }  // end Row Status Text
@@ -244,7 +244,7 @@ Row {
 				}
 				Connections {
 					target: controller
-					onGainChanged: fftGainSlider.value = controller.getFftGain()
+					function onGainChanged() { fftGainSlider.value = controller.getFftGain() }
 				}
 			}
 			// -------------------------- Compressor
@@ -272,7 +272,7 @@ Row {
 				}
 				Connections {
 					target: controller
-					onCompressionChanged: fftCompressionSlider.value = controller.getFftCompression()
+					function onCompressionChanged() { fftCompressionSlider.value = controller.getFftCompression() }
 				}
 			}
 		}  // Row Gain and Compressor Sliders end
@@ -287,10 +287,10 @@ Row {
 			onCheckedChanged: if (checked !== controller.agcEnabled) controller.setAgcEnabled(checked)
 			text: "Auto Gain"
 
-			Connections {
-				target: controller
-				onAgcEnabledChanged: agcCheckbox.checked = controller.agcEnabled
-			}
+				Connections {
+					target: controller
+					function onAgcEnabledChanged() { agcCheckbox.checked = controller.agcEnabled }
+				}
 		}
 		DarkCheckBox {
 			id: dbCheckbox
@@ -303,7 +303,7 @@ Row {
 
 			Connections {
 				target: controller
-				onDecibelConversionChanged: dbCheckbox.checked = controller.decibelConversion
+				function onDecibelConversionChanged() { dbCheckbox.checked = controller.decibelConversion }
 			}
 		}
         DarkCheckBox {
@@ -317,7 +317,7 @@ Row {
 
             Connections {
                 target: controller
-                onLowSoloModeChanged: lowSoloCheckbox.checked = controller.lowSoloMode
+                function onLowSoloModeChanged() { lowSoloCheckbox.checked = controller.lowSoloMode }
             }
         }
 	}  // Right area column end
