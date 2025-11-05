@@ -63,8 +63,8 @@ Dialog {
 				}
 				Connections {
 					target: controller
-					onPresetNameChanged: statusText.updateText()
-					onPresetChangedButNotSavedChanged: statusText.updateText()
+					function onPresetNameChanged() { statusText.updateText() }
+					function onPresetChangedButNotSavedChanged() { statusText.updateText() }
 				}
 			}
 

@@ -27,12 +27,12 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
-#include <QtMultimedia/QAudio>
-#include <QtMultimedia/QAudioInput>
 #include <QtMultimedia/QAudioFormat>
+#include <QtMultimedia/QAudioInput>
+#include <QtMultimedia/QAudioDeviceInfo>
 
 
-// An AudioInputInterface implementation with QAudioInput
+// An AudioInputInterface implementation with Qt Multimedia (QAudioInput)
 // see AudioInputInterface.h for documentation of overridden functions
 class QAudioInputWrapper : public QObject, public AudioInputInterface
 {

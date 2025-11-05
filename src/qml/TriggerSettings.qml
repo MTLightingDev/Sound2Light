@@ -30,7 +30,7 @@ Item {
 	property string triggerName: ""
 	property QtObject triggerController
 	property color color: "darkblue"
-	property bool detailsVisible: true
+	property bool detailsVisible: false
 	property bool isBandpass: true
 
 	Rectangle {  // colored background
@@ -207,7 +207,7 @@ Item {
             }
             Connections {
                 target: triggerController
-                onMuteChanged: {
+                function onMuteChanged() {
                     muteButton.highlightColor = triggerController.getMute() ? "#FF6633" : "lightgreen"
                     playimage.visible = triggerController.getMute()
                     pauseimage.visible = !triggerController.getMute()

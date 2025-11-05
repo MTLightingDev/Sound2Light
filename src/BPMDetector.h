@@ -26,11 +26,11 @@
 #include "MonoAudioBuffer.h"
 #include "BPMOscControler.h"
 
-#include "QCircularBuffer.h"
+#include "CircularBuffer.h"
 #include <QtMath>
 #include <QVector>
-#include <QLinkedList>
 #include <QColor>
+#include <QList>
 
 // Rate to calculate the BPM (significantly lower than the sampling period,
 // but still only quater the buffer length, so this should be fine)
@@ -51,9 +51,8 @@ public:
 
     void detectBPM(); // recalculates the BPM considering the newest data in the buffer
 
-    float getBPM() { return m_bpm; } // returns the detected BPM
-
-    bool bpmIsOld() { return m_framesSinceLastBPMDetection / BPM_UPDATE_RATE > 5; } // returns wether the last time a value detected was longer than five seconds ago
+    float getBPM() const { return m_bpm; }
+    bool bpmIsOld() const { return m_framesSinceLastBPMDetection / BPM_UPDATE_RATE > 5; }
 
     void setMinBPM(int value); // Sets the minimum bpm of the range
 
@@ -86,11 +85,11 @@ protected:
     void evaluateStrings();
 
     const MonoAudioBuffer&              m_inputBuffer; // buffer that stores the audio samples
-    int64_t                             m_lastInputBufferNumSamples; // the number of samples ever put into the buffer when last getting data from there
-    int                                 m_refreshesSinceCalculation; // used to calculate the bpm every n-th call
-    float                               m_bpm; // the detected bpm
-    int                                 m_framesSinceLastBPMDetection; // time since the bpm has last changed in frames
-    int                                 m_minBPM; // the minimum bpm that sets the range of possible bpms as min to 2*min. That solves the 60 vs 120 BPM debate
+    int64_t m_lastInputBufferNumSamples; // the number of samples ever put into the buffer when last getting data from there
+    int     m_framesSinceLastBPMDetection; // time since the bpm has last changed in frames
+    int     m_refreshesSinceCalculation; // used to calculate the bpm every n-th call
+    float   m_bpm; // the detected bpm
+    int     m_minBPM; // the minimum bpm that sets the range of possible bpms as min to 2*min. That solves the 60 vs 120 BPM debate
     BasicFFTInterface*                  m_fft; // FFT implementation
     QVector<float>                      m_window; // array with window data
     QVector<bool>                       m_onsetBuffer; // a boolen buffer indicating wether there was a onset i frames ago
@@ -101,12 +100,11 @@ protected:
     QVector<float>                      m_fftOutput; // buffer for FFT Data
     QVector<float>                      m_currentSpectrum; // the spectrum currently being calculated
     QVector<float>                      m_lastSpectrum; // the spectrum calculated in the last frame for calculating the spectral flux, which is a difference
-    QLinkedList<BeatString>             m_beatStrings; // the IOI Clusters identified from the intervalls
+    QList<BeatString>                   m_beatStrings; // the IOI Clusters identified from the intervalls
     Qt3DCore::QCircularBuffer<float>    m_lastIntervals; // the last bpm values stored as their interval, to achieve smoothing
     float                               m_lastWinningInterval; // the last outputed bpm as an interval before doubling/halfing
     bool                                m_transmitBpm;  // true if the BPM should be transmitted via OSC
 
-    BPMOscControler*                    m_oscController; // the object respoinsible for handling osc output
+    BPMOscControler* m_oscController;
 };
-
 #endif // BPMDETECTOR_H

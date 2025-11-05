@@ -60,7 +60,7 @@ Column {
 		text: "OSC Output"
 		Connections {
 			target: controller
-			onSettingsChanged: sendOscCheckbox.checked = controller.getOscEnabled()
+			function onSettingsChanged() { sendOscCheckbox.checked = controller.getOscEnabled() }
 		}
 	}
 	DarkCheckBox {
@@ -73,7 +73,7 @@ Column {
 		text: "OSC Input"
 		Connections {
 			target: controller
-			onSettingsChanged: oscInputCheckbox.checked = controller.getOscInputEnabled()
+			function onSettingsChanged() { oscInputCheckbox.checked = controller.getOscInputEnabled() }
 		}
     }
 

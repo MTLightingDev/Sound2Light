@@ -50,7 +50,11 @@ OSCNetworkManager::OSCNetworkManager()
 
 	// connect TCP socket with onConnected and onError slots:
 	connect(&m_tcpSocket, SIGNAL(connected()), this, SLOT(onConnected()));
+	#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+	connect(&m_tcpSocket, SIGNAL(errorOccurred(QAbstractSocket::SocketError)), this, SLOT(onError()));
+	#else
 	connect(&m_tcpSocket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(onError()));
+	#endif
 	connect(&m_udpSocket, SIGNAL(readyRead()), this, SLOT(readIncomingUdpDatagrams()));
 	connect(&m_tcpSocket, SIGNAL(readyRead()), this, SLOT(readIncomingTcpStream()));
 
@@ -363,6 +367,11 @@ void OSCNetworkManager::readIncomingTcpStream()
 
 void OSCNetworkManager::processIncomingRawData(QByteArray msgData)
 {
+	// guard against empty packets to avoid out-of-range access
+	if (msgData.isEmpty()) {
+		addToLog("[In] [Invalid] Empty packet");
+		return;
+	}
 	// check if the data is a single message or a bundle of messages:
 	if (msgData[0] == '/') {
 		// it starts with a "/" -> it is a single message:

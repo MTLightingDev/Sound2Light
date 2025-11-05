@@ -48,7 +48,7 @@ Item {
 	Connections {
 		// update bandpass area when a parameter changes:
 		target: bandpassController
-		onParameterChanged: area.update()
+		function onParameterChanged() { area.update() }
 	}
 
 	onWidthChanged: area.update()

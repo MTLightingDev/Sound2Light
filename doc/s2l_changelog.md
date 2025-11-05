@@ -1,6 +1,14 @@
 
 # Sound2Light Change Log
 
+### Version 0.0.4.0.0.0 - 4 November 2025
+
+- Upgraded to Qt 5 & C++ 17
+
+- General code cleanup and maintenance
+
+- Added support for CMAKE
+
 ### Version 0.0.3.1.0.2 - 24 Mar 2018
 
 - Reenabled maximize button

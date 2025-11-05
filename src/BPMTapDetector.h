@@ -27,7 +27,7 @@
 
 #include "utils.h"
 
-#include "QCircularBuffer.h"
+#include "CircularBuffer.h"
 
 #include "BPMOscControler.h"
 
