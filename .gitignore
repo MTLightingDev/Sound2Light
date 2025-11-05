@@ -35,3 +35,6 @@ build-*
 *.qmlproject.user.*
 
 .DS_Store
+
+# CLion & IntelliJ IDE systems
+.idea
