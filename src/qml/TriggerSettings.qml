@@ -30,7 +30,7 @@ Item {
 	property string triggerName: ""
 	property QtObject triggerController
 	property color color: "darkblue"
-	property bool detailsVisible: true
+	property bool detailsVisible: false
 	property bool isBandpass: true
 
 	Rectangle {  // colored background
