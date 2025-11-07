@@ -31,6 +31,9 @@
 #include <QtMultimedia/QAudioDeviceInfo>
 
 #include <QtEndian>
+#include <QElapsedTimer>
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 QAudioInputWrapper::QAudioInputWrapper(MonoAudioBuffer *buffer)
@@ -109,11 +112,105 @@ void QAudioInputWrapper::setInputByName(const QString &inputName)
         m_actualAudioFormat = m_desiredAudioFormat;
     }
 
+    // Precompute decode params for branchless inner loop
+    m_bytesPerSample = m_actualAudioFormat.sampleSize() / 8;
+    m_channelCount   = m_actualAudioFormat.channelCount();
+    m_isLittleEndian = (m_actualAudioFormat.byteOrder() == QAudioFormat::LittleEndian);
+    m_decodeKind = DecodeKind::Unsupported;
+    switch (m_actualAudioFormat.sampleType()) {
+    case QAudioFormat::SignedInt:
+        if (m_bytesPerSample == 1) m_decodeKind = DecodeKind::S8;
+        else if (m_bytesPerSample == 2) m_decodeKind = DecodeKind::S16;
+        else if (m_bytesPerSample == 3) m_decodeKind = DecodeKind::S24;
+        else if (m_bytesPerSample == 4) m_decodeKind = DecodeKind::S32;
+        break;
+    case QAudioFormat::UnSignedInt:
+        if (m_bytesPerSample == 1) m_decodeKind = DecodeKind::U8;
+        else if (m_bytesPerSample == 2) m_decodeKind = DecodeKind::U16;
+        else if (m_bytesPerSample == 3) m_decodeKind = DecodeKind::U24;
+        else if (m_bytesPerSample == 4) m_decodeKind = DecodeKind::U32;
+        break;
+    case QAudioFormat::Float:
+        if (m_bytesPerSample == 4) m_decodeKind = DecodeKind::F32;
+        break;
+    default:
+        m_decodeKind = DecodeKind::Unsupported;
+        qWarning() << "Unsupported sample type:" << m_actualAudioFormat.sampleType();
+        break;
+    }
+
+    // Log selected format and decode path for verification
+    auto stToStr = [](QAudioFormat::SampleType st){
+        switch (st) {
+            case QAudioFormat::SignedInt: return "SignedInt";
+            case QAudioFormat::UnSignedInt: return "UnSignedInt";
+            case QAudioFormat::Float: return "Float";
+            default: return "Unknown";
+        }
+    };
+    auto boToStr = [](QAudioFormat::Endian bo){ return bo == QAudioFormat::LittleEndian ? "LE" : "BE"; };
+    auto dkToStr = [](DecodeKind dk){
+        switch (dk) {
+            case DecodeKind::S8: return "S8"; case DecodeKind::S16: return "S16"; case DecodeKind::S24: return "S24"; case DecodeKind::S32: return "S32";
+            case DecodeKind::U8: return "U8"; case DecodeKind::U16: return "U16"; case DecodeKind::U24: return "U24"; case DecodeKind::U32: return "U32";
+            case DecodeKind::F32: return "F32"; default: return "Unsupported";
+        }
+    };
+    qInfo().nospace() << "Audio input format: rate=" << m_actualAudioFormat.sampleRate()
+                      << " Hz, ch=" << m_actualAudioFormat.channelCount()
+                      << ", size=" << m_actualAudioFormat.sampleSize() << "bits"
+                      << ", type=" << stToStr(m_actualAudioFormat.sampleType())
+                      << ", order=" << boToStr(m_actualAudioFormat.byteOrder())
+                      << ", decode=" << dkToStr(m_decodeKind);
+
     // create new input:
     m_activeInputName = selectedDevice.deviceName();
     m_audioInput = new QAudioInput(selectedDevice, m_actualAudioFormat, this);
+
+    // Basic diagnostics: log state changes and attempt gentle recovery from Idle/Suspended
+    connect(m_audioInput, &QAudioInput::stateChanged, this, [this](QAudio::State s){
+        const QAudio::Error err = m_audioInput ? m_audioInput->error() : QAudio::NoError;
+        qInfo() << "QAudioInput state:" << s << ", error:" << err;
+        if (!m_audioInput) return;
+        switch (s) {
+        case QAudio::IdleState:
+            if (err == QAudio::NoError) {
+                // Some backends flip to Idle when buffer underruns; try resuming once
+                qInfo() << "IdleState with NoError; attempting resume()";
+                m_audioInput->resume();
+            } else {
+                qWarning() << "IdleState due to error" << err;
+            }
+            break;
+        case QAudio::SuspendedState:
+            if (err == QAudio::NoError) {
+                qInfo() << "SuspendedState with NoError; attempting resume()";
+                m_audioInput->resume();
+            }
+            break;
+        default:
+            break;
+        }
+    });
+
+    // Notify callback ~30ms to verify cadence
+    m_audioInput->setNotifyInterval(30);
+    connect(m_audioInput, &QAudioInput::notify, this, [](){ qInfo() << "QAudioInput notify()"; });
+
+    // Set buffer size to reduce wakeups (tune as needed): ~1024 frames
+    const int bytesPerFrame = qMax(1, m_bytesPerSample) * qMax(1, m_channelCount);
+    m_audioInput->setBufferSize(1024 * bytesPerFrame);
+
     m_audioInput->setVolume(1.0);
     m_audioIODevice = m_audioInput->start();
+    if (!m_audioIODevice) {
+        qWarning() << "QAudioInput start() returned null I/O device. Error:" << m_audioInput->error();
+        return;
+    }
+
+    // Reserve IO buffer to typical size (will grow if needed)
+    m_ioBuf.reserve(m_audioInput->bufferSize());
+
     connect(m_audioIODevice, &QIODevice::readyRead, this, &QAudioInputWrapper::audioDataReady);
 }
 
@@ -131,73 +228,264 @@ void QAudioInputWrapper::setVolume(const qreal &value)
 
 void QAudioInputWrapper::audioDataReady()
 {
-	// read data from input as QByteArray:
-    QByteArray data = m_audioIODevice->readAll();
+    if (!m_audioIODevice || m_bytesPerSample <= 0) return;
 
-    const int bytesPerSample = m_actualAudioFormat.sampleSize() / 8; // Qt5 API
-    if (bytesPerSample <= 0) return;
+    // Process all available complete frames to avoid backend Idle due to backlog
+    const std::size_t bytesPerFrame = static_cast<std::size_t>(m_bytesPerSample) * static_cast<std::size_t>(qMax(1, m_channelCount));
+    if (bytesPerFrame == 0) return;
 
-    const std::size_t numSamples = std::size_t(data.size()) / std::size_t(bytesPerSample);
-    QVector<qreal> realData(numSamples);
+    // Stats accumulators (windowed ~0.5s)
+    static QElapsedTimer sTimer;
+    static double accumSumSq = 0.0;
+    static double accumPeak = 0.0;
+    static quint64 accumSamples = 0;
+    static quint64 accumBytes = 0;
+    if (!sTimer.isValid()) sTimer.start();
 
-    const char *ptr = data.constData();
-    const bool isLittleEndian = (m_actualAudioFormat.byteOrder() == QAudioFormat::LittleEndian);
+    while (true) {
+        const qint64 avail = m_audioIODevice->bytesAvailable();
+        if (avail < static_cast<qint64>(bytesPerFrame)) break; // wait for full frame group
 
-    for (std::size_t i = 0; i < numSamples; ++i) {
-        qreal scaled = 0.0;
-        switch (m_actualAudioFormat.sampleType()) {
-        case QAudioFormat::SignedInt:
-            if (bytesPerSample == 2) {
-                qint16 pcm = isLittleEndian
-                    ? qFromLittleEndian<qint16>(reinterpret_cast<const uchar*>(ptr))
-                    : qFromBigEndian<qint16>(reinterpret_cast<const uchar*>(ptr));
-                scaled = qreal(pcm) / 32768.0;
-            } else if (bytesPerSample == 4) {
-                qint32 pcm = isLittleEndian
-                    ? qFromLittleEndian<qint32>(reinterpret_cast<const uchar*>(ptr))
-                    : qFromBigEndian<qint32>(reinterpret_cast<const uchar*>(ptr));
-                scaled = qreal(pcm) / 2147483648.0; // 2^31
-            } else if (bytesPerSample == 1) {
-                // 8-bit signed PCM (rare)
-                const qint8 pcm = *reinterpret_cast<const qint8*>(ptr);
-                scaled = qreal(pcm) / 128.0;
+        // Read only full frames
+        const qint64 framesToRead = (avail / static_cast<qint64>(bytesPerFrame));
+        const qint64 toReadBytes = framesToRead * static_cast<qint64>(bytesPerFrame);
+        if (toReadBytes <= 0) break;
+
+        // Ensure IO buffer capacity and read
+        if (m_ioBuf.size() < toReadBytes) m_ioBuf.resize(static_cast<int>(toReadBytes));
+        const qint64 nread = m_audioIODevice->read(m_ioBuf.data(), static_cast<int>(toReadBytes));
+        if (nread <= 0) break; // nothing read
+
+        const std::size_t totalFrames = static_cast<std::size_t>(nread) / bytesPerFrame;
+        const std::size_t numSamples = totalFrames * static_cast<std::size_t>(qMax(1, m_channelCount));
+        if (numSamples == 0) continue;
+
+        // Ensure reusable real buffer has enough capacity and size
+        if (m_realBuf.size() < static_cast<int>(numSamples)) m_realBuf.resize(static_cast<int>(numSamples));
+
+        const uchar* ptr = reinterpret_cast<const uchar*>(m_ioBuf.constData());
+
+        switch (m_decodeKind) {
+        case DecodeKind::S8:
+            for (std::size_t i = 0; i < numSamples; ++i) {
+                const qint8 v = *reinterpret_cast<const qint8*>(ptr);
+                m_realBuf[static_cast<int>(i)] = qreal(v) / 128.0;
+                ptr += 1;
             }
             break;
-        case QAudioFormat::UnSignedInt:
-            if (bytesPerSample == 1) {
-                const quint8 pcm = *reinterpret_cast<const quint8*>(ptr);
-                scaled = (qreal(int(pcm) - 128) / 128.0);
-            } else if (bytesPerSample == 2) {
-                quint16 pcm = isLittleEndian
-                    ? qFromLittleEndian<quint16>(reinterpret_cast<const uchar*>(ptr))
-                    : qFromBigEndian<quint16>(reinterpret_cast<const uchar*>(ptr));
-                // center at 0 and scale
-                scaled = (qreal(int(pcm) - 32768) / 32768.0);
-            } else if (bytesPerSample == 4) {
-                quint32 pcm = isLittleEndian
-                    ? qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(ptr))
-                    : qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(ptr));
-                scaled = (qreal(qint64(pcm) - 2147483648LL) / 2147483648.0);
+        case DecodeKind::S16:
+            if (m_isLittleEndian) {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const qint16 v = qFromLittleEndian<qint16>(ptr);
+                    m_realBuf[static_cast<int>(i)] = qreal(v) / 32768.0;
+                    ptr += 2;
+                }
+            } else {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const qint16 v = qFromBigEndian<qint16>(ptr);
+                    m_realBuf[static_cast<int>(i)] = qreal(v) / 32768.0;
+                    ptr += 2;
+                }
             }
             break;
-        case QAudioFormat::Float:
-            if (bytesPerSample == 4) {
-                quint32 raw = isLittleEndian
-                    ? qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(ptr))
-                    : qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(ptr));
-                float f;
-                std::memcpy(&f, &raw, sizeof(float));
-                scaled = qreal(f);
+        case DecodeKind::S32:
+            if (m_isLittleEndian) {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const qint32 v = qFromLittleEndian<qint32>(ptr);
+                    m_realBuf[static_cast<int>(i)] = qreal(v) / 2147483648.0; // 2^31
+                    ptr += 4;
+                }
+            } else {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const qint32 v = qFromBigEndian<qint32>(ptr);
+                    m_realBuf[static_cast<int>(i)] = qreal(v) / 2147483648.0; // 2^31
+                    ptr += 4;
+                }
             }
             break;
-        default:
-            scaled = 0.0;
+        case DecodeKind::S24:
+            if (m_isLittleEndian) {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    qint32 v = (qint32(ptr[0]) & 0xFF) | ((qint32(ptr[1]) & 0xFF) << 8) | ((qint32(ptr[2]) & 0xFF) << 16);
+                    if (v & 0x00800000) v |= 0xFF000000; // sign-extend 24-bit
+                    m_realBuf[static_cast<int>(i)] = qreal(v) / 8388608.0; // 2^23
+                    ptr += 3;
+                }
+            } else {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    qint32 v = ((qint32(ptr[0]) & 0xFF) << 16) | ((qint32(ptr[1]) & 0xFF) << 8) | (qint32(ptr[2]) & 0xFF);
+                    if (v & 0x00800000) v |= 0xFF000000;
+                    m_realBuf[static_cast<int>(i)] = qreal(v) / 8388608.0;
+                    ptr += 3;
+                }
+            }
+            break;
+        case DecodeKind::U8:
+            for (std::size_t i = 0; i < numSamples; ++i) {
+                const quint8 v = *ptr++;
+                m_realBuf[static_cast<int>(i)] = qreal(int(v) - 128) / 128.0;
+            }
+            break;
+        case DecodeKind::U16:
+            if (m_isLittleEndian) {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const quint16 v = qFromLittleEndian<quint16>(ptr);
+                    m_realBuf[static_cast<int>(i)] = qreal(int(v) - 32768) / 32768.0;
+                    ptr += 2;
+                }
+            } else {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const quint16 v = qFromBigEndian<quint16>(ptr);
+                    m_realBuf[static_cast<int>(i)] = qreal(int(v) - 32768) / 32768.0;
+                    ptr += 2;
+                }
+            }
+            break;
+        case DecodeKind::U32:
+            if (m_isLittleEndian) {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const quint32 v = qFromLittleEndian<quint32>(ptr);
+                    m_realBuf[static_cast<int>(i)] = qreal(qint64(v) - 2147483648LL) / 2147483648.0;
+                    ptr += 4;
+                }
+            } else {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const quint32 v = qFromBigEndian<quint32>(ptr);
+                    m_realBuf[static_cast<int>(i)] = qreal(qint64(v) - 2147483648LL) / 2147483648.0;
+                    ptr += 4;
+                }
+            }
+            break;
+        case DecodeKind::U24:
+            if (m_isLittleEndian) {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    quint32 v = (quint32(ptr[0]) & 0xFF) | ((quint32(ptr[1]) & 0xFF) << 8) | ((quint32(ptr[2]) & 0xFF) << 16);
+                    qint32 centered = qint32(v) - 0x00800000; // center at 0 (2^23 mid)
+                    m_realBuf[static_cast<int>(i)] = qreal(centered) / 8388608.0; // 2^23
+                    ptr += 3;
+                }
+            } else {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    quint32 v = ((quint32(ptr[0]) & 0xFF) << 16) | ((quint32(ptr[1]) & 0xFF) << 8) | (quint32(ptr[2]) & 0xFF);
+                    qint32 centered = qint32(v) - 0x00800000;
+                    m_realBuf[static_cast<int>(i)] = qreal(centered) / 8388608.0;
+                    ptr += 3;
+                }
+            }
+            break;
+        case DecodeKind::F32:
+            if (m_isLittleEndian) {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const quint32 raw = qFromLittleEndian<quint32>(ptr);
+                    float f;
+                    std::memcpy(&f, &raw, sizeof(float));
+                    m_realBuf[static_cast<int>(i)] = qreal(f);
+                    ptr += 4;
+                }
+            } else {
+                for (std::size_t i = 0; i < numSamples; ++i) {
+                    const quint32 raw = qFromBigEndian<quint32>(ptr);
+                    float f;
+                    std::memcpy(&f, &raw, sizeof(float));
+                    m_realBuf[static_cast<int>(i)] = qreal(f);
+                    ptr += 4;
+                }
+            }
+            break;
+        case DecodeKind::Unsupported:
+        default: {
+            const bool isLE = m_isLittleEndian;
+            const int bps = m_bytesPerSample;
+            QAudioFormat::SampleType st = m_actualAudioFormat.sampleType();
+            const uchar* p = reinterpret_cast<const uchar*>(m_ioBuf.constData());
+            for (std::size_t i = 0; i < numSamples; ++i) {
+                qreal scaled = 0.0;
+                switch (st) {
+                case QAudioFormat::SignedInt:
+                    if (bps == 1) {
+                        const qint8 v = *reinterpret_cast<const qint8*>(p);
+                        scaled = qreal(v) / 128.0;
+                    } else if (bps == 2) {
+                        const qint16 v = isLE ? qFromLittleEndian<qint16>(p) : qFromBigEndian<qint16>(p);
+                        scaled = qreal(v) / 32768.0;
+                    } else if (bps == 3) {
+                        qint32 v = isLE
+                            ? (qint32(p[0]) & 0xFF) | ((qint32(p[1]) & 0xFF) << 8) | ((qint32(p[2]) & 0xFF) << 16)
+                            : ((qint32(p[0]) & 0xFF) << 16) | ((qint32(p[1]) & 0xFF) << 8) | (qint32(p[2]) & 0xFF);
+                        if (v & 0x00800000) v |= 0xFF000000; // sign-extend
+                        scaled = qreal(v) / 8388608.0; // 2^23
+                    } else if (bps == 4) {
+                        const qint32 v = isLE ? qFromLittleEndian<qint32>(p) : qFromBigEndian<qint32>(p);
+                        scaled = qreal(v) / 2147483648.0; // 2^31
+                    }
+                    break;
+                case QAudioFormat::UnSignedInt:
+                    if (bps == 1) {
+                        const quint8 v = *p;
+                        scaled = qreal(int(v) - 128) / 128.0;
+                    } else if (bps == 2) {
+                        const quint16 v = isLE ? qFromLittleEndian<quint16>(p) : qFromBigEndian<quint16>(p);
+                        scaled = qreal(int(v) - 32768) / 32768.0;
+                    } else if (bps == 3) {
+                        quint32 v = isLE
+                            ? (quint32(p[0]) & 0xFF) | ((quint32(p[1]) & 0xFF) << 8) | ((quint32(p[2]) & 0xFF) << 16)
+                            : ((quint32(p[0]) & 0xFF) << 16) | ((quint32(p[1]) & 0xFF) << 8) | (quint32(p[2]) & 0xFF);
+                        qint32 centered = qint32(v) - 0x00800000;
+                        scaled = qreal(centered) / 8388608.0;
+                    } else if (bps == 4) {
+                        const quint32 v = isLE ? qFromLittleEndian<quint32>(p) : qFromBigEndian<quint32>(p);
+                        scaled = qreal(qint64(v) - 2147483648LL) / 2147483648.0;
+                    }
+                    break;
+                case QAudioFormat::Float:
+                    if (bps == 4) {
+                        const quint32 raw = isLE ? qFromLittleEndian<quint32>(p) : qFromBigEndian<quint32>(p);
+                        float f;
+                        std::memcpy(&f, &raw, sizeof(float));
+                        scaled = qreal(f);
+                    }
+                    break;
+                default:
+                    scaled = 0.0;
+                    break;
+                }
+                m_realBuf[static_cast<int>(i)] = scaled;
+                p += bps;
+            }
             break;
         }
-        realData[i] = scaled;
-        ptr += bytesPerSample;
+        }
+
+        // accumulate stats for this chunk
+        double localPeak = 0.0;
+        double localSumSq = 0.0;
+        const int N = static_cast<int>(numSamples);
+        for (int i = 0; i < N; ++i) {
+            const double v = static_cast<double>(m_realBuf[i]);
+            localPeak = std::max(localPeak, std::abs(v));
+            localSumSq += v * v;
+        }
+        accumPeak = std::max(accumPeak, localPeak);
+        accumSumSq += localSumSq;
+        accumSamples += static_cast<quint64>(N);
+        accumBytes += static_cast<quint64>(nread);
+
+        // Pass to MonoAudioBuffer (it will downmix to mono if needed)
+        m_buffer->putSamples(m_realBuf, m_channelCount);
     }
 
-    // Call MonoAudioBuffer as next element in the processing chain:
-	m_buffer->putSamples(realData, m_actualAudioFormat.channelCount());
+    if (sTimer.elapsed() >= 500) { // every ~0.5s
+        const double rms = accumSamples ? std::sqrt(accumSumSq / static_cast<double>(accumSamples)) : 0.0;
+        qInfo().nospace() << "Audio stats: blocks~0.5s, bytes=" << accumBytes
+                          << ", samples=" << accumSamples
+                          << ", ch=" << m_channelCount
+                          << ", peak=" << QString::number(accumPeak, 'f', 3)
+                          << ", rms=" << QString::number(rms, 'f', 3);
+        // reset window
+        accumSumSq = 0.0;
+        accumPeak = 0.0;
+        accumSamples = 0;
+        accumBytes = 0;
+        sTimer.restart();
+    }
 }

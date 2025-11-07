@@ -60,11 +60,21 @@ private slots:
 	void audioDataReady();
 
 protected:
+	// Audio format state
 	QAudioFormat	m_desiredAudioFormat;  // the desired audio format, may not be available
 	QAudioFormat	m_actualAudioFormat;  // the actual audio format used for recording
 	QAudioInput*	m_audioInput;  // a pointer to the used audio input object
 	QIODevice*		m_audioIODevice;  // a pointer to the stream like "device" used while recording
 	QString			m_activeInputName;  // the name of the active audio input
+
+	// Performance: reusable buffers and precomputed decode parameters
+	QByteArray      m_ioBuf;            // reusable raw IO buffer
+	QVector<qreal>  m_realBuf;          // reusable converted samples buffer
+	int             m_bytesPerSample {0};
+	int             m_channelCount {1};
+	bool            m_isLittleEndian {true};
+	enum class DecodeKind { S8, S16, S24, S32, U8, U16, U24, U32, F32, Unsupported };
+	DecodeKind      m_decodeKind { DecodeKind::Unsupported };
 };
 
 #endif // QAUDIOINPUTWRAPPER_H
